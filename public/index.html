@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Element Battle</title>
+  <style>
+    body { font-family: Arial, sans-serif; }
+    .hidden { display: none; }
+    .elements { display: flex; gap: 10px; margin: 10px 0; }
+    .card { border: 1px solid #333; padding: 10px; cursor: pointer; }
+    .selected { background: #cfc; }
+  </style>
+</head>
+<body>
+  <h1>Element Battle</h1>
+  <div id="lobby">
+    <input id="username" placeholder="Your name" />
+    <button id="createBtn">Create Room</button>
+    <input id="roomCode" placeholder="Room code" />
+    <button id="joinBtn">Join Room</button>
+  </div>
+
+  <div id="game" class="hidden">
+    <h2 id="roundInfo"></h2>
+    <div id="scoreboard"></div>
+
+    <div id="elements"></div>
+    <textarea id="abilityDesc" rows="3" cols="40" placeholder="Describe your ability..."></textarea><br/>
+    <input id="imageUrl" placeholder="Image URL (optional)" />
+    <button id="submitChoice">Submit</button>
+
+    <div id="results"></div>
+    <button id="nextRound" class="hidden">Next Round</button>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="client.js"></script>
+</body>
+</html>
