@@ -3,37 +3,194 @@
 <head>
   <meta charset="UTF-8" />
   <title>Element Battle</title>
+  <script src="/socket.io/socket.io.js"></script>
   <style>
-    body { font-family: Arial, sans-serif; }
+    body { font-family: Arial, sans-serif; margin: 20px; }
     .hidden { display: none; }
+    .screen { max-width: 600px; margin: auto; }
+    ul { list-style: none; padding: 0; }
     .elements { display: flex; gap: 10px; margin: 10px 0; }
-    .card { border: 1px solid #333; padding: 10px; cursor: pointer; }
-    .selected { background: #cfc; }
+    .elements button { padding: 8px 12px; border: 1px solid #333; background: #f0f0f0; cursor: pointer; }
+    .elements button.selected { background: #cce5ff; }
   </style>
 </head>
 <body>
-  <h1>Element Battle</h1>
-  <div id="lobby">
-    <input id="username" placeholder="Your name" />
-    <button id="createBtn">Create Room</button>
-    <input id="roomCode" placeholder="Room code" />
-    <button id="joinBtn">Join Room</button>
+
+<div id="loginScreen" class="screen">
+  <h2>Join the Battle</h2>
+  <input id="username" placeholder="Username" />
+  <br /><br />
+  <button id="createRoomBtn">Create Room</button>
+  <div>
+    <input id="roomInput" placeholder="Room Code" />
+    <button id="joinRoomBtn">Join Room</button>
   </div>
+</div>
 
-  <div id="game" class="hidden">
-    <h2 id="roundInfo"></h2>
-    <div id="scoreboard"></div>
+<div id="lobbyScreen" class="screen hidden">
+  <h2>Lobby</h2>
+  <p>Room Code: <span id="roomCodeDisplay"></span></p>
+  <ul id="playerList"></ul>
+  <button id="startGameBtn" class="hidden">Start Game</button>
+</div>
 
-    <div id="elements"></div>
-    <textarea id="abilityDesc" rows="3" cols="40" placeholder="Describe your ability..."></textarea><br/>
-    <input id="imageUrl" placeholder="Image URL (optional)" />
-    <button id="submitChoice">Submit</button>
+<div id="gameScreen" class="screen hidden">
+  <h2 id="roundTitle"></h2>
+  <div id="setsContainer"></div>
+  <textarea id="abilityDesc" rows="3" cols="40" placeholder="Describe your ability"></textarea><br />
+  <input type="file" id="imgInput" /><br />
+  <button id="submitAbilityBtn">Submit Ability</button>
+</div>
 
-    <div id="results"></div>
-    <button id="nextRound" class="hidden">Next Round</button>
-  </div>
+<div id="resultScreen" class="screen hidden">
+  <h2>Battle Result</h2>
+  <div id="abilitiesDisplay"></div>
+  <p id="winnerText"></p>
+  <p id="scoreboard"></p>
+  <button id="nextRoundBtn">Next Round</button>
+</div>
 
-  <script src="/socket.io/socket.io.js"></script>
-  <script src="client.js"></script>
+<div id="gameOverScreen" class="screen hidden">
+  <h2>Game Over</h2>
+  <p id="finalScores"></p>
+  <button id="playAgainBtn">Play Again</button>
+  <button id="backLobbyBtn">Back to Lobby</button>
+</div>
+
+<script>
+  const socket = io();
+  let username = '';
+  let roomCode = '';
+  let isHost = false;
+  let currentSets = [];
+  let selectedElements = [];
+
+  const login = document.getElementById('loginScreen');
+  const lobby = document.getElementById('lobbyScreen');
+  const game = document.getElementById('gameScreen');
+  const result = document.getElementById('resultScreen');
+  const gameOver = document.getElementById('gameOverScreen');
+
+  function show(screen) {
+    [login, lobby, game, result, gameOver].forEach(s => s.classList.add('hidden'));
+    screen.classList.remove('hidden');
+  }
+
+  document.getElementById('createRoomBtn').onclick = () => {
+    username = document.getElementById('username').value.trim();
+    if (!username) return alert('Enter username');
+    socket.emit('createRoom', { username });
+    isHost = true;
+  };
+
+  document.getElementById('joinRoomBtn').onclick = () => {
+    username = document.getElementById('username').value.trim();
+    roomCode = document.getElementById('roomInput').value.trim().toUpperCase();
+    if (!username || !roomCode) return alert('Enter username and room code');
+    socket.emit('joinRoom', { username, roomCode });
+  };
+
+  socket.on('roomCreated', data => {
+    roomCode = data.roomCode;
+    document.getElementById('roomCodeDisplay').textContent = roomCode;
+    document.getElementById('startGameBtn').classList.remove('hidden');
+    show(lobby);
+    updatePlayerList([username]);
+  });
+
+  socket.on('roomJoined', data => {
+    show(lobby);
+    document.getElementById('roomCodeDisplay').textContent = roomCode;
+    updatePlayerList(data.players.map(p => p.name));
+    if (isHost) document.getElementById('startGameBtn').classList.remove('hidden');
+    else document.getElementById('startGameBtn').classList.add('hidden');
+  });
+
+  function updatePlayerList(names) {
+    const ul = document.getElementById('playerList');
+    ul.innerHTML = '';
+    names.forEach(n => {
+      const li = document.createElement('li');
+      li.textContent = n;
+      ul.appendChild(li);
+    });
+  }
+
+  document.getElementById('startGameBtn').onclick = () => {
+    socket.emit('startGame', { roomCode });
+  };
+
+  socket.on('roundStart', data => {
+    currentSets = data.sets;
+    selectedElements = Array(currentSets.length).fill(null);
+    renderSets();
+    document.getElementById('roundTitle').textContent = `Round ${data.round} - ${data.type}`;
+    show(game);
+  });
+
+  function renderSets() {
+    const container = document.getElementById('setsContainer');
+    container.innerHTML = '';
+    currentSets.forEach((set, idx) => {
+      const row = document.createElement('div');
+      row.className = 'elements';
+      set.forEach(el => {
+        const btn = document.createElement('button');
+        btn.textContent = el;
+        btn.onclick = () => {
+          selectedElements[idx] = el;
+          Array.from(row.children).forEach(b => b.classList.remove('selected'));
+          btn.classList.add('selected');
+        };
+        row.appendChild(btn);
+      });
+      container.appendChild(row);
+    });
+  }
+
+  document.getElementById('submitAbilityBtn').onclick = () => {
+    if (selectedElements.some(e => !e)) return alert('Choose an element from each row');
+    const description = document.getElementById('abilityDesc').value.trim();
+    const file = document.getElementById('imgInput').files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        socket.emit('playerChoice', { roomCode, elements: selectedElements, description, imageUrl: reader.result });
+      };
+      reader.readAsDataURL(file);
+    } else {
+      socket.emit('playerChoice', { roomCode, elements: selectedElements, description, imageUrl: '' });
+    }
+  };
+
+  socket.on('battleResult', data => {
+    const [a, b] = data.abilities;
+    const container = document.getElementById('abilitiesDisplay');
+    container.innerHTML = `<div><strong>${a.name}</strong> (${a.elements.join(' + ')})<br>${a.description}<br>Power: ${a.power}</div>` +
+      '<hr />' +
+      `<div><strong>${b.name}</strong> (${b.elements.join(' + ')})<br>${b.description}<br>Power: ${b.power}</div>`;
+    document.getElementById('winnerText').textContent = data.winner === 'tie'
+      ? 'Tie!'
+      : `Winner: ${data.abilities.find(ab => ab.playerId === data.winner).name}`;
+    document.getElementById('scoreboard').textContent = data.scores.map(s => `${s.name}: ${s.score}`).join(' | ');
+    show(result);
+  });
+
+  document.getElementById('nextRoundBtn').onclick = () => {
+    document.getElementById('abilityDesc').value = '';
+    document.getElementById('imgInput').value = '';
+    socket.emit('requestNextRound', { roomCode });
+  };
+
+  socket.on('gameOver', data => {
+    document.getElementById('finalScores').textContent = data.scores.map(s => `${s.name}: ${s.score}`).join(' | ');
+    show(gameOver);
+  });
+
+  document.getElementById('playAgainBtn').onclick = () => location.reload();
+  document.getElementById('backLobbyBtn').onclick = () => location.reload();
+</script>
+
 </body>
 </html>
+
