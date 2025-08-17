@@ -1,14 +1,16 @@
 // Simple multiplayer element-combining game server
 // Uses Express and Socket.io for real-time communication
 
+require('dotenv').config();
+console.log("OpenRouter key present?", !!process.env.OPENROUTER_API_KEY);
+
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
-const dotenv = require('dotenv');
-const fetch = require('node-fetch');
 
-dotenv.config();
+// ✅ Node v18+ has fetch built-in, no need for node-fetch
+const fetch = global.fetch;
 
 const app = express();
 app.use(cors());
@@ -17,13 +19,48 @@ app.use(express.static('public'));
 const server = http.createServer(app);
 const io = new Server(server);
 
-// In-memory game state. Not suitable for production but fine for local play.
+// ------------------ TEST OPENROUTER CONNECTION ------------------
+async function openRouterQuickTest() {
+  if (!process.env.OPENROUTER_API_KEY) {
+    console.log("OpenRouter: missing API key, skipping test.");
+    return;
+  }
+  try {
+    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: process.env.OPENROUTER_MODEL || "deepseek/deepseek-chat-v3-0324:free",
+        messages: [
+          { role: "system", content: "You are a concise assistant." },
+          { role: "user", content: "Reply with the word PONG." }
+        ],
+        temperature: 0
+      })
+    });
+
+    if (!res.ok) {
+      console.log("OpenRouter test HTTP error:", res.status, await res.text());
+      return;
+    }
+    const data = await res.json();
+    const text = data?.choices?.[0]?.message?.content || "";
+    console.log("OpenRouter test reply:", text);
+  } catch (e) {
+    console.log("OpenRouter test failed:", e.message);
+  }
+}
+// call once on startup
+openRouterQuickTest();
+
+// ------------------ GAME STATE ------------------
 const lobbies = {}; // { roomCode: { players: [], currentRound: 0, roundType: 'standard', pending: [] } }
 
-// Basic element pool. Feel free to add more!
 const ELEMENTS = ['Fire', 'Water', 'Earth', 'Air', 'Lightning', 'Ice', 'Metal', 'Nature', 'Shadow', 'Light'];
 
-// Helper to grab random elements from the pool
 function randomElements(count = 3) {
   const copy = [...ELEMENTS];
   const result = [];
@@ -34,7 +71,6 @@ function randomElements(count = 3) {
   return result;
 }
 
-// When only one human is present we create a quick AI opponent
 function createAIPlayer(room) {
   const elements = [randomElements(1)[0], randomElements(1)[0]];
   room.pending.push({
@@ -47,34 +83,35 @@ function createAIPlayer(room) {
   });
 }
 
-// Optionally evaluate abilities using OpenAI. Falls back to random numbers.
+// Optionally evaluate abilities using OpenRouter. Falls back to random numbers.
 async function evaluateAbilities(a, b) {
-  if (process.env.OPENAI_API_KEY) {
+  if (process.env.OPENROUTER_API_KEY) {
     try {
       const prompt = `Which ability would win?\nA: ${a.description}\nB: ${b.description}\nRespond with A or B.`;
-      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`
+          "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
+          "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          model: 'gpt-3.5-turbo',
-          messages: [{ role: 'user', content: prompt }]
+          model: process.env.OPENROUTER_MODEL || "deepseek/deepseek-chat-v3-0324:free",
+          messages: [{ role: "user", content: prompt }]
         })
       });
+
       const data = await response.json();
       const answer = data.choices?.[0]?.message?.content?.trim();
       a.power = Math.floor(Math.random() * 101);
       b.power = Math.floor(Math.random() * 101);
-      if (answer === 'A') a.power = b.power + 1; // ensure A wins
-      if (answer === 'B') b.power = a.power + 1; // ensure B wins
+      if (answer === 'A') a.power = b.power + 1;
+      if (answer === 'B') b.power = a.power + 1;
       return [a, b];
     } catch (err) {
-      console.error('OpenAI API error', err);
+      console.error('OpenRouter API error', err);
     }
   }
-  // Fallback random evaluation
+  // fallback random
   a.power = Math.floor(Math.random() * 101);
   b.power = Math.floor(Math.random() * 101);
   return [a, b];
@@ -85,10 +122,9 @@ function startRound(roomCode) {
   if (!room) return;
   room.currentRound++;
   room.pending = [];
-  // Decide round type
-  const rand = Math.random();
   let type = 'standard';
   let sets = [randomElements(), randomElements()];
+  const rand = Math.random();
   if (rand < 0.33) {
     type = 'missing';
     sets = [randomElements()];
@@ -105,8 +141,8 @@ function startRound(roomCode) {
   });
 }
 
+// ------------------ SOCKET LOGIC ------------------
 io.on('connection', socket => {
-  // Player creates a new lobby
   socket.on('createRoom', ({ username }) => {
     try {
       const roomCode = Math.random().toString(36).substring(2, 6).toUpperCase();
@@ -124,7 +160,6 @@ io.on('connection', socket => {
     }
   });
 
-  // Join an existing lobby
   socket.on('joinRoom', ({ username, roomCode }) => {
     try {
       const room = lobbies[roomCode];
@@ -138,18 +173,15 @@ io.on('connection', socket => {
     }
   });
 
-  // Host starts the game
   socket.on('startGame', ({ roomCode }) => {
     startRound(roomCode);
   });
 
-  // Players submit their element choices and ability
   socket.on('playerChoice', async ({ roomCode, elements, description, imageUrl }) => {
     try {
       const room = lobbies[roomCode];
       if (!room) return;
       if (room.roundType === 'missing') {
-        // server fills the missing element
         elements.push(randomElements(1)[0]);
       }
       room.pending.push({
@@ -161,12 +193,10 @@ io.on('connection', socket => {
         power: 0
       });
 
-      // If we have only one human player, spawn an AI opponent
       if (room.players.length === 1 && room.pending.length === 1) {
         createAIPlayer(room);
       }
 
-      // Once we have two abilities, evaluate the battle
       if (room.pending.length >= 2) {
         const [a, b] = await evaluateAbilities(room.pending[0], room.pending[1]);
         let winner = 'tie';
@@ -190,7 +220,6 @@ io.on('connection', socket => {
     }
   });
 
-  // Request the next round
   socket.on('requestNextRound', ({ roomCode }) => {
     try {
       const room = lobbies[roomCode];
@@ -208,7 +237,6 @@ io.on('connection', socket => {
     }
   });
 
-  // Clean up on disconnect
   socket.on('disconnect', () => {
     for (const code of Object.keys(lobbies)) {
       const room = lobbies[code];
@@ -219,7 +247,6 @@ io.on('connection', socket => {
         if (room.players.length === 0) {
           delete lobbies[code];
         } else if (room.players.length === 1) {
-          // Remaining player will fight AI
           createAIPlayer(room);
         }
         break;
